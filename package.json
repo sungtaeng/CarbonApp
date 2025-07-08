@@ -10,9 +10,16 @@
     "test": "jest"
   },
   "dependencies": {
+    "@react-native/new-app-screen": "0.80.1",
     "react": "19.1.0",
     "react-native": "0.80.1",
-    "@react-native/new-app-screen": "0.80.1"
+    "react-native-chart-kit": "^6.12.0",
+    "react-native-charts-wrapper": "^0.6.0",
+    "react-native-gifted-charts": "^1.4.61",
+    "react-native-linear-gradient": "^2.8.3",
+    "react-native-svg": "^15.12.0",
+    "react-native-vector-icons": "^10.2.0",
+    "victory-native": "^41.17.4"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
