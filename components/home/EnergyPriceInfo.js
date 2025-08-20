@@ -1,6 +1,6 @@
 // ========== 5. 에너지 가격 정보 ==========
 // components/home/EnergyPriceInfo.js
-import React, { useState } from 'react';
+import React from 'react';
 import { View, Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';
 import { RealTimeLineChart } from '../common/RealTimeLineChart';
 import { colors, spacing, commonStyles } from '../../styles/commonStyles';
@@ -41,9 +41,6 @@ export const EnergyPriceInfo = ({ energyData, selectedPeriod, onPeriodChange, on
     <View style={commonStyles.section}>
       <View style={commonStyles.sectionHeader}>
         <Text style={commonStyles.sectionTitle}>에너지 가격 정보</Text>
-        <TouchableOpacity onPress={() => onMorePress('에너지 가격')}>
-          <Text style={commonStyles.moreButton}>더보기</Text>
-        </TouchableOpacity>
       </View>
       <View style={commonStyles.card}>
         <View style={styles.periodSelector}>

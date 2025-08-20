@@ -1,11 +1,16 @@
-// ========== 1. 탄소배출권 가격 카드 ==========
 // components/home/CarbonPriceCard.js
 import React, { useRef, useEffect } from 'react';
-import { View, Text, Animated, StyleSheet } from 'react-native';
+import { View, Text, Animated, StyleSheet, TouchableOpacity } from 'react-native';
 import { RealTimeLineChart } from '../common/RealTimeLineChart';
 import { colors, spacing, commonStyles } from '../../styles/commonStyles';
 
-export const CarbonPriceCard = ({ currentPrice, priceChange, isPositive, realTimeData }) => {
+export const CarbonPriceCard = ({ 
+  currentPrice, 
+  priceChange, 
+  isPositive, 
+  realTimeData,
+  onDetailPress // 🔹 상세보기 버튼 콜백
+}) => {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const colorAnim = useRef(new Animated.Value(0)).current;
 
@@ -28,20 +33,22 @@ export const CarbonPriceCard = ({ currentPrice, priceChange, isPositive, realTim
       duration: 300,
       useNativeDriver: false,
     }).start();
-  }, [currentPrice, priceChange]);
+  }, [currentPrice, priceChange, isPositive]);
 
   return (
     <View style={[commonStyles.section]}>
       <View style={commonStyles.card}>
+        {/* 헤더 */}
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitle}>한국 탄소배출권 (KAU)</Text>
-          <View style={[styles.liveTag, { backgroundColor: isPositive ? '#D1FAE5' : '#FEE2E2' }]}>
-            <Text style={[styles.liveTagText, { color: isPositive ? '#065F46' : '#991B1B' }]}>
-              실시간
-            </Text>
-          </View>
+          
+          {/* 상세보기 버튼 */}
+          <TouchableOpacity onPress={onDetailPress}>
+            <Text style={styles.detailButton}>상세보기</Text>
+          </TouchableOpacity>
         </View>
 
+        {/* 가격 표시 */}
         <Animated.View style={[styles.priceContainer, { transform: [{ scale: scaleAnim }] }]}>
           <Animated.Text style={[
             styles.price,
@@ -52,7 +59,7 @@ export const CarbonPriceCard = ({ currentPrice, priceChange, isPositive, realTim
               }),
             }
           ]}>
-            ₩{currentPrice.toLocaleString()}
+            ₩{Number(currentPrice || 0).toLocaleString()}
           </Animated.Text>
           <View style={styles.changeContainer}>
             <Text style={styles.iconText}>
@@ -67,18 +74,14 @@ export const CarbonPriceCard = ({ currentPrice, priceChange, isPositive, realTim
                 }),
               }
             ]}>
-              {priceChange}%
+              {Number(priceChange || 0)}%
             </Animated.Text>
           </View>
         </Animated.View>
 
-        <RealTimeLineChart data={realTimeData} color={colors.primary} animated />
+        {/* 미니 라인 차트 */}
+        <RealTimeLineChart data={Array.isArray(realTimeData) ? realTimeData : []} color={colors.primary} animated />
 
-        <View style={styles.timeLabels}>
-          <Text style={styles.timeLabel}>09:00</Text>
-          <Text style={styles.timeLabel}>12:00</Text>
-          <Text style={styles.timeLabel}>15:00</Text>
-        </View>
       </View>
     </View>
   );
@@ -96,14 +99,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.gray800,
   },
-  liveTag: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  liveTagText: {
-    fontSize: 12,
+  detailButton: {
+    fontSize: 14,
     fontWeight: '600',
+    color: colors.primary,
   },
   priceContainer: {
     flexDirection: 'row',
@@ -141,5 +140,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.gray400,
     fontWeight: '500',
-  },
+  }, 
 });

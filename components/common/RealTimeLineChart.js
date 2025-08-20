@@ -1,352 +1,354 @@
-
-// ========== 터치 인터랙션이 있는 차트 컴포넌트 ==========
 // components/common/RealTimeLineChart.js
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Dimensions, PanResponder } from 'react-native';
+import React, { useMemo, useEffect, useState, useRef } from 'react';
+import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, Line } from 'react-native-svg';
+import Animated, {
+  useSharedValue,
+  useAnimatedGestureHandler,
+  useAnimatedReaction,
+  runOnJS,
+} from 'react-native-reanimated';
+import { PinchGestureHandler, PanGestureHandler, TapGestureHandler } from 'react-native-gesture-handler';
 import { colors, spacing } from '../../styles/commonStyles';
 
 const { width } = Dimensions.get('window');
 
-export const RealTimeLineChart = ({ 
-  data, 
-  color = colors.primary, 
-  showGrid = true, 
-  animated = true,
-  height = 140 
+export const RealTimeLineChart = ({
+  data = [],
+  labels = [],
+  valuePrefix = '',
+  color = colors.primary,
+  showGrid = true,
+  height = 140,
+  initialBarsOnScreen = 8,
+  onGestureToggle = () => {},
 }) => {
-  const [animationProgress, setAnimationProgress] = useState(0);
-  const [touchPosition, setTouchPosition] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(null);
   const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
 
-  useEffect(() => {
-    if (animated) {
-      setAnimationProgress(0);
-      const timer = setTimeout(() => {
-        setAnimationProgress(1);
-      }, 100);
-      return () => clearTimeout(timer);
-    } else {
-      setAnimationProgress(1);
-    }
-  }, [data, animated]);
-
-  const chartWidth = width - 80;
+  const safeData = useMemo(() => (Array.isArray(data) && data.length > 0 ? data : [0]), [data]);
+  const baseChartWidth = width - 80;
   const chartHeight = height - 40;
-  const maxValue = Math.max(...data);
-  const minValue = Math.min(...data);
-  const range = maxValue - minValue || 1;
   const padding = 20;
 
-  // 좌표 계산
-  const getCoordinates = (value, index) => {
-    const x = padding + (index / (data.length - 1)) * (chartWidth - 2 * padding);
-    const y = padding + (1 - (value - minValue) / range) * (chartHeight - 2 * padding);
-    return { x, y };
-  };
+  // simultaneous handlers
+  const pinchRef = useRef(null);
+  const panRef = useRef(null);
+  const tapRef = useRef(null);
 
-  // 터치 위치에서 가장 가까운 데이터 포인트 찾기
-  const findNearestDataPoint = (touchX) => {
-    const relativeX = touchX - padding;
-    const dataPointWidth = (chartWidth - 2 * padding) / (data.length - 1);
-    const index = Math.round(relativeX / dataPointWidth);
-    return Math.max(0, Math.min(data.length - 1, index));
-  };
-
-  // 터치 이벤트 처리
-  const panResponder = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    
-    onPanResponderGrant: (evt) => {
-      const touchX = evt.nativeEvent.locationX;
-      const index = findNearestDataPoint(touchX);
-      const coords = getCoordinates(data[index], index);
-      
-      setTouchPosition({ x: coords.x, y: coords.y });
-      setSelectedIndex(index);
-      setShowTooltip(true);
-    },
-    
-    onPanResponderMove: (evt) => {
-      const touchX = evt.nativeEvent.locationX;
-      const index = findNearestDataPoint(touchX);
-      const coords = getCoordinates(data[index], index);
-      
-      setTouchPosition({ x: coords.x, y: coords.y });
-      setSelectedIndex(index);
-    },
-    
-    onPanResponderRelease: () => {
-      // 터치를 놓아도 툴팁 유지 (3초 후 사라짐)
-      setTimeout(() => {
-        setShowTooltip(false);
-        setTouchPosition(null);
-        setSelectedIndex(null);
-      }, 3000);
-    },
+  // JS state(렌더용)
+  const [sStart, setSStart] = useState(0);
+  const [sBars, setSBars] = useState(() => {
+    const len = Math.max(2, safeData.length);
+    return Math.min(Math.max(2, initialBarsOnScreen), len);
   });
 
-  // 선 그래프 Path 생성
+  // UI thread shared values
+  const minBars = 2;
+  const maxBars = useMemo(() => Math.max(2, safeData.length), [safeData.length]);
+  const startIndex = useSharedValue(0);
+  const barsOnScreen = useSharedValue(Math.min(Math.max(2, initialBarsOnScreen), Math.max(2, safeData.length)));
+
+  // 초기: 오른쪽 정렬
+  useEffect(() => {
+    const desired = Math.min(Math.max(2, initialBarsOnScreen), Math.max(2, safeData.length));
+    const start = Math.max(0, safeData.length - desired);
+    barsOnScreen.value = desired;
+    startIndex.value = start;
+    setSBars(desired);
+    setSStart(start);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeData, initialBarsOnScreen]);
+
+  // shared → JS state 동기화 (핵심)
+  useAnimatedReaction(
+    () => {
+      const b = Math.max(minBars, Math.min(maxBars, Math.round(barsOnScreen.value)));
+      const s = Math.max(0, Math.min(safeData.length - b, Math.round(startIndex.value)));
+      return { s, b };
+    },
+    ({ s, b }) => {
+      runOnJS(setSStart)(s);
+      runOnJS(setSBars)(b);
+    },
+    [safeData.length, minBars, maxBars]
+  );
+
+  // 가시 데이터
+  const visible = useMemo(() => {
+    const end = Math.min(sStart + sBars, safeData.length);
+    return safeData.slice(sStart, end);
+  }, [safeData, sStart, sBars]);
+
+  // y 도메인
+  const { vMin, vMax } = useMemo(() => {
+    if (!visible.length) return { vMin: 0, vMax: 1 };
+    let min = visible[0], max = visible[0];
+    for (let i = 1; i < visible.length; i++) {
+      const v = visible[i];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    if (min === max) max = min + 1;
+    return { vMin: min, vMax: max };
+  }, [visible]);
+
+  // 좌표계
+  const visCount = Math.max(1, visible.length);
+  const denom = Math.max(1, visCount - 1);
+  const chartW = baseChartWidth - 2 * padding;
+
+  const xFor = (globalIndex) => {
+    const local = globalIndex - sStart;
+    const ratio = Math.max(0, Math.min(1, local / denom));
+    return padding + ratio * chartW;
+  };
+
+  const indexFor = (x) => {
+    const rel = Math.max(0, Math.min(1, (x - padding) / (chartW || 1)));
+    return sStart + rel * denom;
+  };
+
+  const yFor = (val) => {
+    const r = vMax - vMin || 1;
+    return padding + (1 - (val - vMin) / r) * (chartHeight - 2 * padding);
+  };
+
+  // 툴팁
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const updateTooltip = (touchX) => {
+    if (!visible.length) return;
+    const idx = Math.round(indexFor(touchX));
+    const clamped = clamp(idx, sStart, sStart + (visCount - 1));
+    const localIdx = clamped - sStart;
+    if (visible[localIdx] == null) return;
+    setSelectedIndex(clamped);
+    setShowTooltip(true);
+    setTooltipPosition({ x: xFor(clamped), y: yFor(visible[localIdx]) });
+  };
+  const hideTooltip = () => { setShowTooltip(false); setSelectedIndex(null); };
+
+  // 핀치: 확대/축소 (정수 기반)
+  const pinchGestureHandler = useAnimatedGestureHandler({
+    onStart: (_, ctx) => {
+      ctx.bars = barsOnScreen.value;
+      ctx.start = startIndex.value;
+      runOnJS(onGestureToggle)(true);
+    },
+    onActive: (e, ctx) => {
+      const w = Math.max(1, ctx.bars - 1);
+      const focusIndex = ctx.start + ((e.focalX - padding) / Math.max(1, chartW)) * w;
+
+      let nextBars = Math.round(ctx.bars / (e.scale || 1));
+      nextBars = Math.max(minBars, Math.min(maxBars, nextBars));
+
+      const leftRatio = (focusIndex - ctx.start) / Math.max(1, w);
+      let nextStart = Math.round(focusIndex - leftRatio * (nextBars - 1));
+      const maxStart = Math.max(0, safeData.length - nextBars);
+      nextStart = Math.max(0, Math.min(maxStart, nextStart));
+
+      startIndex.value = nextStart;
+      barsOnScreen.value = nextBars;
+    },
+    onEnd: () => { runOnJS(onGestureToggle)(false); },
+  });
+
+  // 팬: 좌/우 이동
+  const panGestureHandler = useAnimatedGestureHandler({
+    onStart: (_, ctx) => {
+      ctx.start = startIndex.value;
+      ctx.bars = barsOnScreen.value;
+      runOnJS(onGestureToggle)(true);
+    },
+    onActive: (e, ctx) => {
+      const pxPerBar = chartW / Math.max(1, ctx.bars - 1);
+      const deltaBars = e.translationX / Math.max(1e-6, pxPerBar);
+      const maxStart = Math.max(0, safeData.length - ctx.bars);
+      const nextStart = Math.max(0, Math.min(maxStart, Math.round(ctx.start - deltaBars)));
+      startIndex.value = nextStart;
+    },
+    onEnd: () => { runOnJS(onGestureToggle)(false); },
+  });
+
+  // 탭: onEnd가 좌표 안정적
+  const tapGestureHandler = useAnimatedGestureHandler({
+    onEnd: (e) => runOnJS(updateTooltip)(e.x),
+  });
+
+  // Path
   const createPath = () => {
-    if (data.length === 0) return '';
-    
-    let path = '';
-    data.forEach((value, index) => {
-      const { x, y } = getCoordinates(value, index);
-      
-      if (index === 0) {
-        path += `M ${x} ${y}`;
-      } else {
-        // 부드러운 곡선으로 연결
-        const prevCoord = getCoordinates(data[index - 1], index - 1);
-        const cp1x = prevCoord.x + (x - prevCoord.x) * 0.5;
-        const cp1y = prevCoord.y;
-        const cp2x = prevCoord.x + (x - prevCoord.x) * 0.5;
+    if (visCount === 0) return '';
+    if (visCount === 1) {
+      const x = padding, y = yFor(visible[0]);
+      return `M ${x} ${y} L ${x} ${y}`;
+    }
+    let d = '';
+    for (let i = 0; i < visCount; i++) {
+      const x = padding + (i / Math.max(1, visCount - 1)) * chartW;
+      const y = yFor(visible[i]);
+      if (i === 0) d += `M ${x} ${y}`;
+      else {
+        const prevX = padding + ((i - 1) / Math.max(1, visCount - 1)) * chartW;
+        const prevY = yFor(visible[i - 1]);
+        const cp1x = prevX + (x - prevX) * 0.4;
+        const cp1y = prevY;
+        const cp2x = prevX + (x - prevX) * 0.6;
         const cp2y = y;
-        path += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${x} ${y}`;
+        d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${x} ${y}`;
       }
-    });
-    
-    return path;
+    }
+    return d;
   };
 
-  // 면적 채우기용 Path 생성
   const createAreaPath = () => {
-    if (data.length === 0) return '';
-    
+    if (visCount === 0) return '';
     const linePath = createPath();
-    const firstPoint = getCoordinates(data[0], 0);
-    const lastPoint = getCoordinates(data[data.length - 1], data.length - 1);
-    
-    return `${linePath} L ${lastPoint.x} ${chartHeight - padding} L ${firstPoint.x} ${chartHeight - padding} Z`;
+    const firstX = padding;
+    const lastX = padding + ((visCount - 1) / Math.max(1, visCount - 1)) * chartW;
+    return `${linePath} L ${lastX} ${chartHeight - padding} L ${firstX} ${chartHeight - padding} Z`;
   };
 
-  // 그리드 라인 생성
   const renderGridLines = () => {
     if (!showGrid) return null;
-    
-    const gridLines = [];
-    const horizontalLines = 5;
-    
-    for (let i = 0; i <= horizontalLines; i++) {
-      const y = padding + (i / horizontalLines) * (chartHeight - 2 * padding);
-      gridLines.push(
-        <Path
-          key={`grid-${i}`}
-          d={`M ${padding} ${y} L ${chartWidth - padding} ${y}`}
-          stroke={colors.gray200}
-          strokeWidth="1"
-          opacity="0.5"
-        />
-      );
+    const els = [];
+    const horizontal = 4;
+    for (let i = 0; i <= horizontal; i++) {
+      const y = padding + (i / horizontal) * (chartHeight - 2 * padding);
+      els.push(<Line key={`h-${i}`} x1={padding} y1={y} x2={baseChartWidth - padding} y2={y} stroke={colors.gray200} strokeWidth="1" opacity="0.4" />);
     }
-    
-    return gridLines;
+    const vertical = Math.min(10, Math.max(2, Math.round(visCount / 12)));
+    for (let i = 0; i <= vertical; i++) {
+      const x = padding + (i / Math.max(1, vertical)) * chartW;
+      els.push(<Line key={`v-${i}`} x1={x} y1={padding} x2={x} y2={chartHeight - padding} stroke={colors.gray200} strokeWidth="1" opacity="0.3" />);
+    }
+    return els;
   };
 
-  // 데이터 포인트 렌더링
   const renderDataPoints = () => {
-    return data.map((value, index) => {
-      const { x, y } = getCoordinates(value, index);
-      const isSelected = selectedIndex === index;
-      
-      return (
-        <Circle
-          key={`point-${index}`}
-          cx={x}
-          cy={y}
-          r={isSelected ? "5" : "3"}
-          fill={isSelected ? colors.white : color}
-          stroke={color}
-          strokeWidth={isSelected ? "3" : "2"}
-          opacity={animationProgress}
-        />
-      );
-    });
+    if (visCount > 60) return null;
+    const pts = [];
+    for (let i = 0; i < visCount; i++) {
+      const x = padding + (i / Math.max(1, visCount - 1)) * chartW;
+      const y = yFor(visible[i]);
+      const isSel = selectedIndex === sStart + i;
+      pts.push(<Circle key={`p-${i}`} cx={x} cy={y} r={isSel ? '6' : '3'} fill={isSel ? colors.white : color} stroke={color} strokeWidth={isSel ? '3' : '2'} />);
+    }
+    return pts;
   };
 
-  // 터치 인디케이터 렌더링
   const renderTouchIndicator = () => {
-    if (!showTooltip || !touchPosition) return null;
-
+    if (!showTooltip || selectedIndex == null) return null;
+    const localIdx = selectedIndex - sStart;
+    if (localIdx < 0 || localIdx >= visCount) return null;
+    const x = padding + (localIdx / Math.max(1, visCount - 1)) * chartW;
+    const y = yFor(visible[localIdx]);
     return (
       <>
-        {/* 세로 선 */}
-        <Line
-          x1={touchPosition.x}
-          y1={padding}
-          x2={touchPosition.x}
-          y2={chartHeight - padding}
-          stroke={color}
-          strokeWidth="1"
-          strokeDasharray="5,5"
-          opacity="0.8"
-        />
-        
-        {/* 가로 선 */}
-        <Line
-          x1={padding}
-          y1={touchPosition.y}
-          x2={chartWidth - padding}
-          y2={touchPosition.y}
-          stroke={color}
-          strokeWidth="1"
-          strokeDasharray="5,5"
-          opacity="0.8"
-        />
-        
-        {/* 선택된 포인트 강조 */}
-        <Circle
-          cx={touchPosition.x}
-          cy={touchPosition.y}
-          r="6"
-          fill={colors.white}
-          stroke={color}
-          strokeWidth="3"
-        />
+        <Line x1={x} y1={padding} x2={x} y2={chartHeight - padding} stroke={color} strokeWidth="1" strokeDasharray="4,4" opacity="0.7" />
+        <Circle cx={x} cy={y} r="7" fill={colors.white} stroke={color} strokeWidth="3" />
       </>
     );
   };
 
-  const linePath = createPath();
-  const areaPath = createAreaPath();
-  const selectedValue = selectedIndex !== null ? data[selectedIndex] : null;
+  const linePath = useMemo(createPath, [visible, vMin, vMax, sStart, sBars, color]);
+  const areaPath = useMemo(createAreaPath, [visible, vMin, vMax, sStart, sBars, color]);
 
   return (
-    <View style={[styles.chartContainer, { height }]}>
-      <View {...panResponder.panHandlers} style={styles.touchArea}>
-        <Svg width={chartWidth} height={chartHeight} style={styles.svg}>
-          <Defs>
-            <LinearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-              <Stop offset="0%" stopColor={color} stopOpacity="0.3" />
-              <Stop offset="100%" stopColor={color} stopOpacity="0.05" />
-            </LinearGradient>
-          </Defs>
-          
-          {/* 그리드 */}
-          {renderGridLines()}
-          
-          {/* 면적 채우기 */}
-          <Path
-            d={areaPath}
-            fill="url(#areaGradient)"
-            opacity={animationProgress}
-          />
-          
-          {/* 선 그래프 */}
-          <Path
-            d={linePath}
-            fill="none"
-            stroke={color}
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity={animationProgress}
-          />
-          
-          {/* 데이터 포인트 */}
-          {renderDataPoints()}
-          
-          {/* 터치 인디케이터 */}
-          {renderTouchIndicator()}
-        </Svg>
+    <View style={[styles.chartContainer, { height }]} onTouchEnd={hideTooltip}>
+      <View style={styles.scaleInfo}>
+        <Text style={styles.scaleText}>{`${Math.max(2, Math.max(1, visible.length))} pts`}</Text>
       </View>
-      
-      {/* 값 표시 */}
-      <View style={styles.valueContainer}>
-        <Text style={styles.maxValue}>{maxValue.toLocaleString()}</Text>
-        <Text style={styles.minValue}>{minValue.toLocaleString()}</Text>
+
+      <PinchGestureHandler
+        ref={pinchRef}
+        simultaneousHandlers={[panRef, tapRef]}
+        onGestureEvent={pinchGestureHandler}
+      >
+        <Animated.View style={styles.gestureContainer}>
+          <PanGestureHandler
+            ref={panRef}
+            simultaneousHandlers={[pinchRef, tapRef]}
+            onGestureEvent={panGestureHandler}
+            minPointers={1}
+            maxPointers={1}
+            activeOffsetX={[-5, 5]}
+            failOffsetY={[-8, 8]}
+          >
+            <Animated.View style={styles.gestureContainer}>
+              <TapGestureHandler
+                ref={tapRef}
+                simultaneousHandlers={[pinchRef, panRef]}
+                onGestureEvent={tapGestureHandler}
+                numberOfTaps={1}
+              >
+                <Animated.View style={styles.chartWrapper}>
+                  <View style={styles.svgContainer}>
+                    <Svg width={baseChartWidth} height={chartHeight}>
+                      <Defs>
+                        <LinearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                          <Stop offset="0%" stopColor={color} stopOpacity="0.3" />
+                          <Stop offset="100%" stopColor={color} stopOpacity="0.05" />
+                        </LinearGradient>
+                      </Defs>
+
+                      {renderGridLines()}
+                      <Path d={areaPath} fill="url(#areaGradient)" />
+                      <Path d={linePath} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                      {renderDataPoints()}
+                      {renderTouchIndicator()}
+                    </Svg>
+                  </View>
+                </Animated.View>
+              </TapGestureHandler>
+            </Animated.View>
+          </PanGestureHandler>
+        </Animated.View>
+      </PinchGestureHandler>
+
+      {/* 가시 구간 min/max */}
+      <View style={styles.valueContainer} pointerEvents="none">
+        <Text style={styles.maxValue}>{Number.isFinite(vMax) ? `${valuePrefix}${vMax.toLocaleString()}` : '-'}</Text>
+        <Text style={styles.minValue}>{Number.isFinite(vMin) ? `${valuePrefix}${vMin.toLocaleString()}` : '-'}</Text>
       </View>
-      
+
       {/* 툴팁 */}
-      {showTooltip && selectedValue !== null && (
-        <View style={[
-          styles.tooltip,
-          {
-            left: Math.max(10, Math.min(chartWidth - 80, touchPosition?.x - 40)),
-            top: touchPosition?.y < 60 ? touchPosition?.y + 20 : touchPosition?.y - 60,
-          }
-        ]}>
-          <Text style={styles.tooltipValue}>₩{selectedValue.toLocaleString()}</Text>
-          
+      {showTooltip && selectedIndex != null && visible.length > 0 && (
+        <View
+          style={[
+            styles.tooltip,
+            {
+              left: Math.max(10, Math.min(baseChartWidth - 140, tooltipPosition.x - 70)),
+              top: tooltipPosition.y < 60 ? tooltipPosition.y + 20 : tooltipPosition.y - 60,
+            },
+          ]}
+        >
+          <Text style={styles.tooltipValue}>
+            {valuePrefix}{visible[selectedIndex - sStart] !== undefined ? visible[selectedIndex - sStart].toLocaleString() : '-'}
+          </Text>
+          <Text style={styles.tooltipIndex}>
+            {labels?.[selectedIndex] ?? `#${selectedIndex + 1}`}
+          </Text>
         </View>
       )}
-      
-  
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  chartContainer: {
-    backgroundColor: '#FAFBFC',
-    borderRadius: 12,
-    marginVertical: spacing.md,
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  touchArea: {
-    flex: 1,
-  },
-  svg: {
-    marginHorizontal: 10,
-    marginVertical: 10,
-  },
-  valueContainer: {
-    position: 'absolute',
-    right: 15,
-    top: 15,
-    bottom: 15,
-    justifyContent: 'space-between',
-  },
-  maxValue: {
-    fontSize: 10,
-    color: colors.gray600,
-    fontWeight: '500',
-  },
-  minValue: {
-    fontSize: 10,
-    color: colors.gray600,
-    fontWeight: '500',
-  },
+  chartContainer: { backgroundColor: '#FAFBFC', borderRadius: 12, marginVertical: spacing.md, position: 'relative', overflow: 'hidden' },
+  gestureContainer: { flex: 1 },
+  chartWrapper: { flex: 1, overflow: 'hidden', marginHorizontal: 10, marginVertical: 10 },
+  svgContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  scaleInfo: { position: 'absolute', top: 10, left: 10, backgroundColor: 'rgba(0,0,0,0.8)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, zIndex: 10 },
+  scaleText: { color: colors.white, fontSize: 12, fontWeight: '700' },
+  valueContainer: { position: 'absolute', right: 15, top: 15, bottom: 15, justifyContent: 'space-between' },
+  maxValue: { fontSize: 10, color: colors.gray600, fontWeight: '500' },
+  minValue: { fontSize: 10, color: colors.gray600, fontWeight: '500' },
   tooltip: {
-    position: 'absolute',
-    backgroundColor: colors.gray800,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    shadowColor: colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
-    zIndex: 10,
+    position: 'absolute', backgroundColor: '#0F172A', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 8, zIndex: 15, alignItems: 'center',
   },
-  tooltipValue: {
-    color: colors.white,
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  tooltipIndex: {
-    color: colors.gray200,
-    fontSize: 10,
-    textAlign: 'center',
-    marginTop: 2,
-  },
-  hintContainer: {
-    position: 'absolute',
-    bottom: 5,
-    left: 10,
-    right: 10,
-    alignItems: 'center',
-  },
-  hintText: {
-    fontSize: 10,
-    color: colors.gray400,
-    textAlign: 'center',
-    opacity: 0.7,
-  },
+  tooltipValue: { color: '#FFFFFF', fontSize: 15, fontWeight: '700', textAlign: 'center' },
+  tooltipIndex: { color: '#CBD5E1', fontSize: 11, marginTop: 2, fontWeight: '500' },
 });

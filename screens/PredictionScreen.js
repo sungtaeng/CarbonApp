@@ -1,3 +1,4 @@
+
 // screens/PredictionScreen.js
 import React from 'react';
 import { View, Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';

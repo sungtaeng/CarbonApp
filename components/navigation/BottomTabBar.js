@@ -1,4 +1,3 @@
-// ========== 네비게이션 바 ==========
 // components/navigation/BottomTabBar.js
 import React, { useRef } from 'react';
 import { View, Text, TouchableOpacity, Animated, PanResponder, StyleSheet } from 'react-native';
@@ -6,10 +5,10 @@ import { colors, spacing } from '../../styles/commonStyles';
 
 export const BottomTabBar = ({ activeTab, onTabPress }) => {
   const panAnim = useRef(new Animated.Value(0)).current;
-  
+
+  // 🔹 차트 탭(📈) 제거
   const tabs = [
     { icon: '🏠', label: '홈' },
-    { icon: '📈', label: '차트' },
     { icon: '📰', label: '뉴스' },
     { icon: '🔮', label: '예측' }
   ];
@@ -27,7 +26,7 @@ export const BottomTabBar = ({ activeTab, onTabPress }) => {
       } else if (gestureState.dx < -50 && activeTab < tabs.length - 1) {
         onTabPress(activeTab + 1);
       }
-      
+
       Animated.spring(panAnim, {
         toValue: 0,
         useNativeDriver: false,
@@ -36,7 +35,7 @@ export const BottomTabBar = ({ activeTab, onTabPress }) => {
   });
 
   return (
-    <Animated.View 
+    <Animated.View
       style={[
         styles.tabBar,
         { transform: [{ translateX: panAnim }] }
